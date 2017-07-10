@@ -250,6 +250,18 @@ public abstract class HttpTLSTest extends HttpTestBase {
   }
 
   @Test
+  // Client specifies no cert and it is requested
+  public void testTLSClienRequesttNoCert() throws Exception {
+    testTLS(Cert.NONE, Trust.SERVER_JKS, Cert.SERVER_JKS, Trust.SERVER_JKS).requestsClientAuth().pass();
+  }
+
+  @Test
+  // Client specifies invalid cert and it is requested
+  public void testTLSClientRequestBadCert() throws Exception {
+    testTLS(Cert.CLIENT_JKS, Trust.SERVER_JKS, Cert.SERVER_JKS, Trust.NONE).requestsClientAuth().pass();
+  }
+
+  @Test
   // Client specifies cert by CA and it is required
   public void testTLSClientCertPEM_CARequired() throws Exception {
     testTLS(Cert.CLIENT_PEM_ROOT_CA, Trust.SERVER_JKS, Cert.SERVER_JKS, Trust.CLIENT_PEM_ROOT_CA).requiresClientAuth().pass();
@@ -737,7 +749,7 @@ public abstract class HttpTLSTest extends HttpTestBase {
     boolean clientOpenSSL;
     boolean clientVerifyHost = true;
     boolean clientSSL = true;
-    boolean requiresClientAuth;
+    ClientAuth clientAuth = ClientAuth.NONE;
     KeyCertOptions serverCert;
     TrustOptions serverTrust;
     boolean serverUsesCrl;
@@ -780,7 +792,12 @@ public abstract class HttpTLSTest extends HttpTestBase {
     }
 
     TLSTest requiresClientAuth() {
-      requiresClientAuth = true;
+      clientAuth = ClientAuth.REQUIRED;
+      return this;
+    }
+
+    TLSTest requestsClientAuth() {
+      clientAuth = ClientAuth.REQUEST;
       return this;
     }
 
@@ -954,9 +971,7 @@ public abstract class HttpTLSTest extends HttpTestBase {
       HttpServerOptions serverOptions = new HttpServerOptions();
       serverOptions.setTrustOptions(serverTrust);
       serverOptions.setKeyCertOptions(serverCert);
-      if (requiresClientAuth) {
-        serverOptions.setClientAuth(ClientAuth.REQUIRED);
-      }
+      serverOptions.setClientAuth(clientAuth);
       if (serverUsesCrl) {
         serverOptions.addCrlPath("tls/root-ca/crl.pem");
       }
@@ -980,6 +995,15 @@ public abstract class HttpTLSTest extends HttpTestBase {
           assertEquals(serverSSL, req.isSSL());
           assertEquals("foo", buffer.toString());
           req.response().end("bar");
+          if (req.connection().isSsl()) {
+            try {
+              clientPeerCert = req.connection().peerCertificateChain()[0];
+            } catch (SSLPeerUnverifiedException ignore) {
+              if (clientCert == null) {
+                HttpTLSTest.this.fail("Client presented no cert");
+              }
+            }
+          }
         });
       });
       server.listen(ar -> {
