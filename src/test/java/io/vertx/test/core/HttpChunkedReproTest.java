@@ -11,39 +11,16 @@
 
 package io.vertx.test.core;
 
-import io.netty.handler.codec.TooLongFrameException;
 import io.netty.handler.codec.http.HttpHeaderValues;
-import io.vertx.core.*;
-import io.vertx.core.buffer.Buffer;
+import io.vertx.core.Handler;
 import io.vertx.core.http.*;
-import io.vertx.core.http.impl.HttpClientRequestImpl;
-import io.vertx.core.impl.ConcurrentHashSet;
-import io.vertx.core.impl.ContextImpl;
-import io.vertx.core.impl.VertxInternal;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
-import io.vertx.core.net.*;
-import io.vertx.core.parsetools.RecordParser;
-import io.vertx.core.streams.Pump;
+import io.vertx.core.net.JksOptions;
 import org.junit.Test;
 
-import java.io.File;
 import java.net.HttpURLConnection;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.stream.IntStream;
 
-import static io.vertx.test.core.TestUtils.*;
-
-/**
- * @author <a href="http://tfox.org">Tim Fox</a>
- * @author <a href="mailto:nscavell@redhat.com">Nick Scavelli</a>
- */
 public class HttpChunkedReproTest extends HttpTestBase {
   @Override
   public void setUp() throws Exception {
@@ -52,14 +29,12 @@ public class HttpChunkedReproTest extends HttpTestBase {
 
   class PayloadGenerator {
     private AtomicInteger length;
-    private int width;
     private Handler<String> payloadHandler;
     private Handler<Void> endHandler;
     private Random random = new Random();
 
-    PayloadGenerator(int length, int width, Handler<String> payloadHandler, Handler<Void> endHandler) {
+    PayloadGenerator(int length, Handler<String> payloadHandler, Handler<Void> endHandler) {
       this.length = new AtomicInteger(length);
-      this.width = width;
       this.payloadHandler = payloadHandler;
       this.endHandler = endHandler;
     }
@@ -68,18 +43,26 @@ public class HttpChunkedReproTest extends HttpTestBase {
       vertx.setPeriodic(1, id -> {
         int chunksLeft = length.decrementAndGet();
         if (chunksLeft <= 0) {
-          vertx.setTimer(random.nextInt(9) + 1, id2 -> {
+          vertx.setTimer(random.nextInt(20) + 1, id2 -> {
+            System.out.println("endHandler called on " + Thread.currentThread().getName());
             endHandler.handle(null);
           });
           vertx.cancelTimer(id);
         } else {
-          payloadHandler.handle(makePayload());
+          vertx.setTimer(2, id2 -> {
+            try {
+              Thread.sleep(random.nextInt(10) + 1);
+            } catch (InterruptedException e) {
+              System.out.println(e.getMessage());
+            }
+            payloadHandler.handle(makePayload());
+          });
         }
       });
     }
 
     private String makePayload() {
-      return TestUtils.randomAlphaString(width);
+      return TestUtils.randomAlphaString(random.nextInt(10000));
     }
   }
 
@@ -95,27 +78,32 @@ public class HttpChunkedReproTest extends HttpTestBase {
     );
 
     server.requestHandler(req -> {
-      HttpServerResponse response = req.response().setChunked(true);
+      HttpServerResponse response = req.response().setChunked(true).putHeader(HttpHeaders.CONTENT_TYPE, HttpHeaderValues.APPLICATION_JSON)
+        .setStatusCode(HttpURLConnection.HTTP_OK);
+      System.out.println("requestHandler called on " + Thread.currentThread().getName());
       new PayloadGenerator(
-        10000,
-        10000,
+        20000,
         response::write,
         v -> response
-          .putHeader(HttpHeaders.CONTENT_TYPE, HttpHeaderValues.APPLICATION_JSON)
-          .setStatusCode(HttpURLConnection.HTTP_OK)
           .end()).start();
     });
 
     startServer();
-      client.get(new RequestOptions().setSsl(true).setPort(DEFAULT_HTTPS_PORT).setHost(DEFAULT_HTTPS_HOST), resp -> {
-        resp.bodyHandler(buff -> {
-        //  assertEquals(String.join("", chunks), buff.toString());
-          complete();
+    client.get(new RequestOptions().setSsl(true).setPort(DEFAULT_HTTPS_PORT).setHost(DEFAULT_HTTPS_HOST), resp -> {
+    }).putHeader("Connection", "close")
+      .connectionHandler(connection -> {
+        assertTrue( "Connection is secure", connection.isSsl());
+        connection.exceptionHandler(throwable -> {
+          System.out.println(throwable);
+          this.fail(throwable);
         });
-      }).putHeader("Connection", "close")
-        .exceptionHandler(this::fail)
-        .end();
+      })
+      .exceptionHandler(throwable -> {
+        System.out.println(throwable);
+        this.fail(throwable);
+      })
+      .end();
 
-      await();
+    await();
   }
 }
