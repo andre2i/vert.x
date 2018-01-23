@@ -41,25 +41,24 @@ public class HttpChunkedReproTest extends HttpTestBase {
     }
 
     public void start() {
-      vertx.setPeriodic(1, id -> {
-        int chunksLeft = length.decrementAndGet();
-        if (chunksLeft <= 0) {
-          vertx.setTimer(random.nextInt(20) + 1, id2 -> {
-            System.out.println("endHandler called on " + Thread.currentThread().getName());
+      int count = length.get();
+      for (int i = 0; i < count; i++) {
+        vertx.setTimer(1, id1 -> {
+          if (length.get() <= 0) {
             endHandler.handle(null);
-          });
-          vertx.cancelTimer(id);
-        } else {
-          vertx.setTimer(2, id2 -> {
-            try {
-              Thread.sleep(random.nextInt(10) + 1);
-            } catch (InterruptedException e) {
-              System.out.println(e.getMessage());
-            }
-            payloadHandler.handle(makePayload());
-          });
-        }
-      });
+          } else {
+            vertx.setTimer(2, id2 -> {
+              try {
+                Thread.sleep(random.nextInt(200) + 1);
+              } catch (InterruptedException e) {
+                System.out.println(e.getMessage());
+              }
+              payloadHandler.handle(makePayload());
+              length.decrementAndGet();
+            });
+          }
+        });
+      }
     }
 
     private String makePayload() {
@@ -101,10 +100,12 @@ public class HttpChunkedReproTest extends HttpTestBase {
         .setStatusCode(HttpURLConnection.HTTP_OK);
       System.out.println("requestHandler called on " + Thread.currentThread().getName());
       new PayloadGenerator(
-        20000,
+        2000,
         response::write,
-        v -> response
-          .end()).start();
+        v -> {
+          response.end();
+          System.out.println("endHandler called on " + Thread.currentThread().getName());
+        }).start();
     })
       .connectionHandler(connection -> connection.exceptionHandler(throwable -> {
         System.out.println("Server connection error >> " + throwable);
@@ -117,6 +118,7 @@ public class HttpChunkedReproTest extends HttpTestBase {
 
     startServer();
     client.get(new RequestOptions().setSsl(true).setPort(DEFAULT_HTTPS_PORT).setHost(DEFAULT_HTTPS_HOST), resp -> {
+      complete();
     }).putHeader("Connection", "close")
       .connectionHandler(connection -> {
         assertTrue( "Connection is secure", connection.isSsl());
