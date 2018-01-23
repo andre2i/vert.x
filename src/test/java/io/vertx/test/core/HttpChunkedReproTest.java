@@ -14,6 +14,7 @@ package io.vertx.test.core;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.vertx.core.Handler;
 import io.vertx.core.http.*;
+import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.JksOptions;
 import org.junit.Test;
 
@@ -62,7 +63,25 @@ public class HttpChunkedReproTest extends HttpTestBase {
     }
 
     private String makePayload() {
-      return TestUtils.randomAlphaString(random.nextInt(10000));
+      return makePayload(random.nextInt(2) + 1).encode();
+    }
+
+    private JsonObject makePayload(int depth) {
+      JsonObject root = randomJson();
+      if (depth == 0) return root;
+      int width = random.nextInt(20) + 1;
+      for (int i = 1; i < width; i++) {
+        root.put(TestUtils.randomAlphaString(random.nextInt(20)), makePayload(depth - 1));
+      }
+
+      return root;
+    }
+
+    private JsonObject randomJson() {
+      return new JsonObject()
+        .put(
+          TestUtils.randomAlphaString(random.nextInt(20)),
+          TestUtils.randomAlphaString(random.nextInt(20)));
     }
   }
 
@@ -86,7 +105,15 @@ public class HttpChunkedReproTest extends HttpTestBase {
         response::write,
         v -> response
           .end()).start();
-    });
+    })
+      .connectionHandler(connection -> connection.exceptionHandler(throwable -> {
+        System.out.println("Server connection error >> " + throwable);
+        this.fail(throwable);
+      }))
+      .exceptionHandler(throwable -> {
+        System.out.println("Server error >> " + throwable);
+        this.fail(throwable);
+      });
 
     startServer();
     client.get(new RequestOptions().setSsl(true).setPort(DEFAULT_HTTPS_PORT).setHost(DEFAULT_HTTPS_HOST), resp -> {
@@ -94,12 +121,12 @@ public class HttpChunkedReproTest extends HttpTestBase {
       .connectionHandler(connection -> {
         assertTrue( "Connection is secure", connection.isSsl());
         connection.exceptionHandler(throwable -> {
-          System.out.println(throwable);
+          System.out.println("Client connection error >> " + throwable);
           this.fail(throwable);
         });
       })
       .exceptionHandler(throwable -> {
-        System.out.println(throwable);
+        System.out.println("Client error >> " + throwable);
         this.fail(throwable);
       })
       .end();
